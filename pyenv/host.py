@@ -73,6 +73,7 @@ class Host:
     mod_os_spec = importlib.util.find_spec('os')
     mod.os = importlib.util.module_from_spec(mod_os_spec)
     mod_os_spec.loader.exec_module(mod.os)
+    mod.pyenv = pyenv
 
 
     mod.sys.stdin = self.stdin_reader

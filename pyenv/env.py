@@ -5,3 +5,6 @@ def set(k, v):
 
 def get(k):
   return _env[k]
+
+def keys():
+  return _env.keys()
