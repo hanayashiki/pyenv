@@ -12,6 +12,9 @@ class LoadCodeByPath(NamedTuple):
   environ : dict
   argv : list
 
+class TaskDone(NamedTuple):
+  pass
+
 class JsonProtocol:
 
   sep = ord('\n')
@@ -31,7 +34,7 @@ class JsonProtocol:
         "method": "msg",
         "tunnel": obj.tunnel,
         "message": obj.message,
-        "eof": False
+        "eof": obj.eof
       })
 
     def for_load_code_by_path(obj : LoadCodeByPath):
@@ -43,9 +46,15 @@ class JsonProtocol:
         "argv": obj.argv
       })
 
+    def for_task_done(obj : TaskDone):
+      return JsonProtocol.obj_to_bytes({
+        "method": "task_done"
+      })
+
     return {
       Message: for_message,
-      LoadCodeByPath: for_load_code_by_path
+      LoadCodeByPath: for_load_code_by_path,
+      TaskDone: for_task_done
     }[type(obj)](obj)
 
   @staticmethod
@@ -57,6 +66,8 @@ class JsonProtocol:
         return Message(tunnel=d["tunnel"], message=d["message"], eof=d["eof"])
       elif d["method"] == "load_code_by_path":
         return LoadCodeByPath(path=d["path"], pwd=d["pwd"], environ=d["environ"], argv=d["argv"])
+      elif d["method"] == "task_done":
+        return TaskDone()
       else:
         raise ValueError()
 

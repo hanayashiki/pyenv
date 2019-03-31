@@ -2,10 +2,18 @@ from typing import *
 import types
 import pyenv
 import importlib
+import importlib.util
 import socket
 import queue
 import threading
 import sys
+import os
+import traceback
+import argparse
+import copy
+from pyenv.protocol import TaskDone, Message
+from pyenv.utils import log, old_stderr, old_stdout
+import traceback
 
 class Host:
 
@@ -13,53 +21,100 @@ class Host:
     self.sock = sock
     self.client_addr = client_addr
 
+    self.host_task_queue = queue.Queue()
+
     self.stdin_queue = queue.Queue()
     self.out_queue = queue.Queue()
 
-    self.stdin_proxy = pyenv.io.IOProxy(input_queue=self.stdin_queue, output_queue=None)
-    self.stdout_proxy = pyenv.io.IOProxy(input_queue=None, output_queue=self.out_queue)
-    self.stderr_proxy = pyenv.io.IOProxy(input_queue=None, output_queue=self.out_queue)
+    self.stdin_proxy = pyenv.proxy_io.IOProxy(input_queue=self.stdin_queue, output_queue=None)
+    self.stdout_proxy = pyenv.proxy_io.IOProxy(input_queue=None, output_queue=self.out_queue)
+    self.stderr_proxy = pyenv.proxy_io.IOProxy(input_queue=None, output_queue=self.out_queue)
 
-    self.stdin_reader = pyenv.io.IOProxyReader(self.stdin_proxy)
-    self.stdout_writer = pyenv.io.IOProxyWriter("stdout", self.stdout_proxy)
-    self.stderr_writer = pyenv.io.IOProxyWriter("stderr", self.stderr_proxy)
+    self.stdin_reader = pyenv.proxy_io.IOProxyReader(self.stdin_proxy)
+    self.stdout_writer = pyenv.proxy_io.IOProxyWriter("stdout", self.stdout_proxy)
+    self.stderr_writer = pyenv.proxy_io.IOProxyWriter("stderr", self.stderr_proxy)
 
     self.command_handlers = {
       pyenv.protocol.LoadCodeByPath: self.for_load_code_by_path
     }
 
-    self.socket_splitter = pyenv.io.SocketSplitter(protocol=pyenv.protocol.JsonProtocol(),
-                                                   sock=self.sock,
-                                                   sock_write_source=self.out_queue,
-                                                   sock_stdin_dest=self.stdin_queue,
-                                                   sock_stdout_dest=None,
-                                                   sock_stderr_dest=None)
+    self.socket_splitter = pyenv.proxy_io.SocketSplitter(protocol=pyenv.protocol.JsonProtocol(),
+                                                         sock=self.sock,
+                                                         sock_write_source=self.out_queue,
+                                                         sock_stdin_dest=self.stdin_queue,
+                                                         sock_stdout_dest=None,
+                                                         sock_stderr_dest=None,
+                                                         command_handlers=self.command_handlers)
 
   def run(self):
-    threading.Thread(self.socket_splitter.run).start()
+    threading.Thread(target=self.socket_splitter.run).start()
+    try:
+      while True:
+        task = self.host_task_queue.get()
+        task()
+    except StopIteration:
+      pass
 
   def for_load_code_by_path(self, m : pyenv.protocol.LoadCodeByPath):
-    code = open(m.path, encoding="utf-8")
+    log("for_load_code_by_path")
+
+    os.chdir(m.pwd)
+
+    code = open(m.path, encoding="utf-8").read()
     code = compile(code, m.path, "exec")
 
     mod = types.ModuleType(m.path)
     mod.__file__ = m.path
     mod.__package__ = ''
 
-    mod.sys = importlib.import_module("sys")
-    mod.os = importlib.import_module("os")
+    mod_sys_spec = importlib.util.find_spec('sys')
+    mod.sys = importlib.util.module_from_spec(mod_sys_spec)
+    mod_sys_spec.loader.exec_module(mod.sys)
+    mod_os_spec = importlib.util.find_spec('os')
+    mod.os = importlib.util.module_from_spec(mod_os_spec)
+    mod_os_spec.loader.exec_module(mod.os)
+
 
     mod.sys.stdin = self.stdin_reader
     mod.sys.stdout = self.stdout_writer
     mod.sys.stderr = self.stderr_writer
 
     mod.sys.argv = m.argv
-    mod.os.environ = m.environ
+    for k, v in m.environ.items():
+      mod.os.environ[k] = v
 
-    exec(code, mod.__dict__)
+    def code_exec():
+      try:
+        exec(code, mod.__dict__)
+      except Exception:
+        traceback.print_exc(file=self.stderr_writer)
+      finally:
+        self.host_task_queue.put(self.task_done)
+
+    self.host_task_queue.put(code_exec)
+
+  def task_done(self):
+    self.out_queue.put(Message(True, "stdout", ""))
+    self.out_queue.put(Message(True, "stderr", ""))
+    self.out_queue.put(TaskDone())
+    raise StopIteration()
 
 def main(argv):
-  pass
+  parser = argparse.ArgumentParser(add_help=True)
+  parser.add_argument('-ip', action='store', dest='ip', default='127.0.0.1', help='IP address of the pyenv host. ')
+  parser.add_argument('-port', action='store', default='8964', help='Port of the pyenv host. ', type=int)
+  argv = parser.parse_args(argv[1:])
+
+  listen_sock = socket.socket()
+  listen_sock.bind((argv.ip, argv.port))
+  listen_sock.listen()
+  while True:
+    try:
+      client_sock, client_addr = listen_sock.accept()
+      host = Host(client_sock, client_addr)
+      host.run()
+    except Exception:
+      traceback.print_exc(file=old_stderr)
 
 
 if __name__ == '__main__':

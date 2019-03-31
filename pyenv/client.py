@@ -7,6 +7,9 @@ import socket
 import threading
 import sys
 import argparse
+import selectors
+
+from pyenv.utils import log
 
 class Client:
 
@@ -19,31 +22,49 @@ class Client:
     self.stdout_queue = queue.Queue()
     self.stderr_queue = queue.Queue()
 
-    self.stdin_proxy = pyenv.io.IOProxy(input_queue=None, output_queue=self.stdin_queue)
-    self.stdout_proxy = pyenv.io.IOProxy(input_queue=self.stdout_queue, output_queue=None)
-    self.stderr_proxy = pyenv.io.IOProxy(input_queue=self.stderr_queue, output_queue=None)
+    self.stdin_proxy = pyenv.proxy_io.IOProxy(input_queue=None, output_queue=self.stdin_queue)
+    self.stdout_proxy = pyenv.proxy_io.IOProxy(input_queue=self.stdout_queue, output_queue=None)
+    self.stderr_proxy = pyenv.proxy_io.IOProxy(input_queue=self.stderr_queue, output_queue=None)
 
-    self.socket_splitter = pyenv.io.SocketSplitter(protocol=pyenv.protocol.JsonProtocol(),
-                                                   sock=self.sock,
-                                                   sock_write_source=self.stdin_queue,
-                                                   sock_stdin_dest=None,
-                                                   sock_stdout_dest=self.stdout_queue,
-                                                   sock_stderr_dest=self.stderr_queue)
+    self.command_handlers = {
+      pyenv.protocol.TaskDone: self.for_task_done
+    }
+
+
+    self.socket_splitter = pyenv.proxy_io.SocketSplitter(protocol=pyenv.protocol.JsonProtocol(),
+                                                         sock=self.sock,
+                                                         sock_write_source=self.stdin_queue,
+                                                         sock_stdin_dest=None,
+                                                         sock_stdout_dest=self.stdout_queue,
+                                                         sock_stderr_dest=self.stderr_queue,
+                                                         command_handlers=self.command_handlers,
+                                                         on_broken_pipe=self.done)
+    self.running = True
     
     self.code_config = code_config
 
   def stdin_collector(self):
-    while True:
-      _in = input()
-      self.stdin_proxy.write("stdin", _in)
+    selector = selectors.DefaultSelector()
+    selector.register(sys.stdin.fileno(), selectors.EVENT_READ)
+    while self.running:
+      r = selector.select(timeout=0.01)
+      if len(r) > 0:
+        _in = sys.stdin.readline()
+        self.stdin_proxy.write("stdin", _in)
 
   def stdout_collector(self):
-    while True:
-      print(self.stdout_proxy.readline())
+    try:
+      while not self.stdout_proxy.empty():
+        print(self.stdout_proxy.read(), end='')
+    except EOFError:
+      pass
 
   def stderr_collector(self):
-    while True:
-      print(self.stderr_proxy.readline())
+    try:
+      while not self.stderr_proxy.empty():
+        print(self.stderr_proxy.read(), end='', file=sys.stderr)
+    except EOFError:
+      pass
       
   def load_code(self, cfg : 'CodeConfig'):
     obj = pyenv.protocol.LoadCodeByPath(
@@ -63,12 +84,20 @@ class Client:
     
     self.load_code(self.code_config)
 
+  def done(self):
+    self.socket_splitter.done = True
+    self.running = False
+
+  def for_task_done(self, obj : pyenv.protocol.TaskDone):
+    self.done()
+
+
 class CodeConfig:
   
   def __init__(self, code_path, pwd=None, environ=None, argv=None):
     self.code_path = code_path
     self.pwd = os.getcwd() if pwd is None else pwd
-    self.environ = os.environ
+    self.environ = dict(os.environ)
     if environ:
       self.environ.update(environ)
     self.argv = [code_path] if argv is None else argv

@@ -4,7 +4,8 @@ import queue
 import selectors
 import logging
 import threading
-from pyenv.protocol import JsonProtocol, Message
+from pyenv.protocol import JsonProtocol, Message, TaskDone
+from pyenv.utils import log
 
 class SocketSplitter:
 
@@ -14,14 +15,17 @@ class SocketSplitter:
                sock_write_source : queue.Queue = None,
                sock_stdin_dest : queue.Queue = None,
                sock_stdout_dest : queue.Queue = None,
-               sock_stderr_dest : queue.Queue = None):
+               sock_stderr_dest : queue.Queue = None,
+               on_broken_pipe = None):
     self.protocol = protocol
     self.sock = sock
+    self.done = False
     self.command_handlers = command_handlers
     self.sock_write_source = sock_write_source
     self.sock_stdin_dest = sock_stdin_dest
     self.sock_stdout_dest = sock_stdout_dest
     self.sock_stderr_dest = sock_stderr_dest
+    self.on_broken_pipe = on_broken_pipe
 
   def sock_reader(self):
     buffer = bytearray()
@@ -43,6 +47,9 @@ class SocketSplitter:
           sent = self.sock.send(encoded)
           yield
           encoded = encoded[sent:]
+        if isinstance(head, TaskDone):
+          self.done = True
+          self.sock.close()
       except queue.Empty:
         yield
 
@@ -50,7 +57,6 @@ class SocketSplitter:
   def read_handler(self, buffer : bytearray):
     try:
       decoded = self.protocol.decode(buffer)
-
       def for_message(obj : Message):
         {
           "stdin": self.sock_stdin_dest,
@@ -64,7 +70,7 @@ class SocketSplitter:
 
       if type(decoded) in basic_handlers:
         basic_handlers[type(decoded)](decoded)
-      elif type(decoded) in self.command_handlers:
+      elif self.command_handlers and type(decoded) in self.command_handlers:
         self.command_handlers[type(decoded)](decoded)
       else:
         raise ValueError("Unhandled message %r" % decoded)
@@ -79,13 +85,18 @@ class SocketSplitter:
     sock_writer = self.sock_writer()
     sock_writer.send(None)
     selector.register(self.sock.fileno(), events=selectors.EVENT_WRITE | selectors.EVENT_READ)
-    while True:
-      results = selector.select()
-      for event_key, event_mask in results:
-        if event_mask & selectors.EVENT_READ != 0:
-          sock_reader.send(self.sock.recv(4096))
-        if event_mask & selectors.EVENT_WRITE != 0:
-          sock_writer.send(None)
+    try:
+      while self.done == False:
+        results = selector.select()
+        for event_key, event_mask in results:
+          if event_mask & selectors.EVENT_READ != 0:
+            sock_reader.send(self.sock.recv(4096))
+          if event_mask & selectors.EVENT_WRITE != 0:
+            sock_writer.send(None)
+    except BrokenPipeError:
+      log("broken pipe")
+      if self.on_broken_pipe:
+        self.on_broken_pipe()
 
 
 class StringBuffer:
@@ -94,19 +105,28 @@ class StringBuffer:
     self._buffer = []
     self._buffer_size = 0
     self.lock = threading.Lock()
+    self.eof = False
 
   def read_until_from_queue(self, n, q : queue.Queue, cond : callable = None):
-    if cond is None:
-      cond = lambda x : True
 
     while n < 0 or self._buffer_size < n:
-      message: Message = q.get()
+      if cond is None:
+        try:
+          message: Message = q.get_nowait()
+        except queue.Empty:
+          break
+      else:
+        message: Message = q.get()
+
       if message.eof:
+        self.eof = True
+        if self._buffer_size == 0:
+          raise EOFError
         break
 
       self._buffer.append(message.message)
       self._buffer_size += len(message.message)
-      if cond(message):
+      if cond and cond(message):
         break
 
   def readline_from_queue(self, q):
@@ -176,11 +196,13 @@ class IOProxy:
   def write(self, tunnel : str, text : str):
     self.output_queue.put(Message(eof=False, tunnel=tunnel, message=text))
 
-class IOProxyReader(io.TextIOWrapper):
+  def empty(self):
+    return self._buffer.eof == True
+
+class IOProxyReader:
 
   def __init__(self, proxy : IOProxy, *args, **kwargs):
     self._proxy = proxy
-    super().__init__(*args, **kwargs)
 
   def read(self, n=-1):
     return self._proxy.read(n)
@@ -188,13 +210,23 @@ class IOProxyReader(io.TextIOWrapper):
   def readline(self, *args, **kwargs):
     return self._proxy.readline()
 
-class IOProxyWriter(io.TextIOWrapper):
+  def flush(self):
+    pass
+
+  def empty(self):
+    return self._proxy.empty()
+
+
+class IOProxyWriter:
 
   def __init__(self, tunnel : str, proxy : IOProxy, *args, **kwargs):
     self.tunnel = tunnel
     self._proxy = proxy
-    super().__init__(*args, **kwargs)
 
   def write(self, t : str):
     self._proxy.write(self.tunnel, t)
+
+  def flush(self):
+    pass
+
 
