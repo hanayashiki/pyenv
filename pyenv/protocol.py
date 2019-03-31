@@ -6,14 +6,50 @@ class Message(NamedTuple):
   tunnel : str
   message : str
 
+  def encode(self):
+    return JsonProtocol.obj_to_bytes({
+      "method": "msg",
+      "tunnel": self.tunnel,
+      "message": self.message,
+      "eof": self.eof
+    })
+
+
 class LoadCodeByPath(NamedTuple):
   path : str
   pwd : str
   environ : dict
   argv : list
 
+  def encode(self):
+    return JsonProtocol.obj_to_bytes({
+      "method": "load_code_by_path",
+      "path": self.path,
+      "pwd": self.pwd,
+      "environ": self.environ,
+      "argv": self.argv
+    })
+
+class LoadCode(NamedTuple):
+  code : str
+  pwd : str
+  environ : dict
+  argv : list
+
+  def encode(self):
+    return JsonProtocol.obj_to_bytes({
+      "method": "load_code",
+      "code": self.code,
+      "pwd": self.pwd,
+      "environ": self.environ,
+      "argv": self.argv
+    })
+
 class TaskDone(NamedTuple):
-  pass
+  def encode(self):
+    return JsonProtocol.obj_to_bytes({
+      "method": "task_done"
+    })
 
 class JsonProtocol:
 
@@ -29,47 +65,28 @@ class JsonProtocol:
 
   @staticmethod
   def encode(obj) -> bytes:
-    def for_message(obj : Message):
-      return JsonProtocol.obj_to_bytes({
-        "method": "msg",
-        "tunnel": obj.tunnel,
-        "message": obj.message,
-        "eof": obj.eof
-      })
-
-    def for_load_code_by_path(obj : LoadCodeByPath):
-      return JsonProtocol.obj_to_bytes({
-        "method": "load_code_by_path",
-        "path": obj.path,
-        "pwd": obj.pwd,
-        "environ": obj.environ,
-        "argv": obj.argv
-      })
-
-    def for_task_done(obj : TaskDone):
-      return JsonProtocol.obj_to_bytes({
-        "method": "task_done"
-      })
-
-    return {
-      Message: for_message,
-      LoadCodeByPath: for_load_code_by_path,
-      TaskDone: for_task_done
-    }[type(obj)](obj)
+    return obj.encode()
 
   @staticmethod
   def decode(b: bytes):
     try:
       d = JsonProtocol.bytes_to_obj(b)
 
-      if d["method"] == "msg":
-        return Message(tunnel=d["tunnel"], message=d["message"], eof=d["eof"])
-      elif d["method"] == "load_code_by_path":
-        return LoadCodeByPath(path=d["path"], pwd=d["pwd"], environ=d["environ"], argv=d["argv"])
-      elif d["method"] == "task_done":
-        return TaskDone()
-      else:
-        raise ValueError()
+      # if d["method"] == "msg":
+      #   return Message(tunnel=d["tunnel"], message=d["message"], eof=d["eof"])
+      # elif d["method"] == "load_code_by_path":
+      #   return LoadCodeByPath(path=d["path"], pwd=d["pwd"], environ=d["environ"], argv=d["argv"])
+      # elif d["method"] == "task_done":
+      #   return TaskDone()
+      #
+      # else:
+      #   raise ValueError()
+      return {
+        "msg": lambda: Message(tunnel=d["tunnel"], message=d["message"], eof=d["eof"]),
+        "load_code_by_path": lambda: LoadCodeByPath(path=d["path"], pwd=d["pwd"], environ=d["environ"], argv=d["argv"]),
+        "load_code": lambda: LoadCode(code=d["code"], pwd=d["pwd"], environ=d["environ"], argv=d["argv"]),
+        "task_done": lambda: TaskDone(),
+      }[d["method"]]()
 
     except Exception as e:
       raise ValueError("Wrong message: %r" % b)

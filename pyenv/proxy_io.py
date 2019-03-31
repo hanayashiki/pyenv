@@ -16,7 +16,8 @@ class SocketSplitter:
                sock_stdin_dest : queue.Queue = None,
                sock_stdout_dest : queue.Queue = None,
                sock_stderr_dest : queue.Queue = None,
-               on_broken_pipe = None):
+               on_broken_pipe = None,
+               on_read_handler_exception = None):
     self.protocol = protocol
     self.sock = sock
     self.done = False
@@ -26,6 +27,7 @@ class SocketSplitter:
     self.sock_stdout_dest = sock_stdout_dest
     self.sock_stderr_dest = sock_stderr_dest
     self.on_broken_pipe = on_broken_pipe
+    self.on_read_handler_exception = on_read_handler_exception
 
   def sock_reader(self):
     buffer = bytearray()
@@ -75,8 +77,11 @@ class SocketSplitter:
       else:
         raise ValueError("Unhandled message %r" % decoded)
 
-    except ValueError as e:
-      logging.error(e)
+    except Exception as e:
+      log(e)
+      if self.on_read_handler_exception:
+        self.on_read_handler_exception(e)
+
 
   def run(self):
     selector = selectors.DefaultSelector()

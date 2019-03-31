@@ -30,7 +30,6 @@ class Client:
       pyenv.protocol.TaskDone: self.for_task_done
     }
 
-
     self.socket_splitter = pyenv.proxy_io.SocketSplitter(protocol=pyenv.protocol.JsonProtocol(),
                                                          sock=self.sock,
                                                          sock_write_source=self.stdin_queue,
@@ -67,12 +66,20 @@ class Client:
       pass
       
   def load_code(self, cfg : 'CodeConfig'):
-    obj = pyenv.protocol.LoadCodeByPath(
-      path=cfg.code_path,
-      pwd=cfg.pwd,
-      environ=cfg.environ,
-      argv=cfg.argv
-    )
+    if cfg.code == None:
+      obj = pyenv.protocol.LoadCodeByPath(
+        path=cfg.code_path,
+        pwd=cfg.pwd,
+        environ=cfg.environ,
+        argv=cfg.argv
+      )
+    else:
+      obj = pyenv.protocol.LoadCode(
+        code=cfg.code,
+        pwd=cfg.pwd,
+        environ=cfg.environ,
+        argv=cfg.argv
+      )
     
     self.stdin_queue.put(obj)    
 
@@ -94,18 +101,19 @@ class Client:
 
 class CodeConfig:
   
-  def __init__(self, code_path, pwd=None, environ=None, argv=None):
+  def __init__(self, code_path, pwd=None, environ=None, argv=None, code=None):
     self.code_path = code_path
     self.pwd = os.getcwd() if pwd is None else pwd
     self.environ = dict(os.environ)
     if environ:
       self.environ.update(environ)
     self.argv = [code_path] if argv is None else argv
+    self.code = code
 
 def main(argv):
   parser = argparse.ArgumentParser(add_help=True)
-  required = parser.add_argument_group('required named arguments')
-  required.add_argument('f', action='store', help='The path to your code. ')
+  path_arg = parser.add_argument_group('required named arguments')
+  path_arg.add_argument('-f', action='store', default=None, help='The path to your code. ')
   optionals = parser.add_argument_group('required named arguments')
   optionals.add_argument('-ip', action='store', dest='ip', default='127.0.0.1', help='IP address of the pyenv host. ')
   optionals.add_argument('-port', action='store', default='8964', help='Port of the pyenv host. ', type=int)
@@ -116,11 +124,14 @@ def main(argv):
                                                                           'the process\'s working directory, '
                                                                           'but merely records it. ')
   optionals.add_argument('-env', action='store', default=None, help='Extra environment variables for your script. ')
+  optionals.add_argument('-c', action='store', default=None, help='Python script, executed with pyenv imported. '
+                                                                  'This will override `f` argument. ')
 
   optionals.add_argument('rest', nargs=argparse.REMAINDER)
   argv = parser.parse_args(argv[1:])
 
-  client = Client((argv.ip, argv.port), CodeConfig(argv.f, pwd=argv.wd, environ=argv.env, argv=[argv.f] + argv.rest))
+  client = Client((argv.ip, argv.port),
+                  CodeConfig(argv.f, pwd=argv.wd, environ=argv.env, argv=[argv.f] + argv.rest, code=argv.c))
   client.run()
 
 if __name__ == '__main__':

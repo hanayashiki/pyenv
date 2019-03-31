@@ -35,7 +35,8 @@ class Host:
     self.stderr_writer = pyenv.proxy_io.IOProxyWriter("stderr", self.stderr_proxy)
 
     self.command_handlers = {
-      pyenv.protocol.LoadCodeByPath: self.for_load_code_by_path
+      pyenv.protocol.LoadCodeByPath: self.for_load_code_by_path,
+      pyenv.protocol.LoadCode: self.for_load_code
     }
 
     self.socket_splitter = pyenv.proxy_io.SocketSplitter(protocol=pyenv.protocol.JsonProtocol(),
@@ -44,7 +45,8 @@ class Host:
                                                          sock_stdin_dest=self.stdin_queue,
                                                          sock_stdout_dest=None,
                                                          sock_stderr_dest=None,
-                                                         command_handlers=self.command_handlers)
+                                                         command_handlers=self.command_handlers,
+                                                         on_read_handler_exception=self.read_handler_excetion)
 
   def run(self):
     threading.Thread(target=self.socket_splitter.run).start()
@@ -55,16 +57,14 @@ class Host:
     except StopIteration:
       pass
 
-  def for_load_code_by_path(self, m : pyenv.protocol.LoadCodeByPath):
-    log("for_load_code_by_path")
+  def get_code(self, content : str, filename : str, argv : list, environ : dict, pwd : str):
+    os.chdir(pwd)
 
-    os.chdir(m.pwd)
+    code = content
+    code = compile(code, filename, "exec")
 
-    code = open(m.path, encoding="utf-8").read()
-    code = compile(code, m.path, "exec")
-
-    mod = types.ModuleType(m.path)
-    mod.__file__ = m.path
+    mod = types.ModuleType(filename)
+    mod.__file__ = filename
     mod.__package__ = ''
 
     mod_sys_spec = importlib.util.find_spec('sys')
@@ -79,19 +79,46 @@ class Host:
     mod.sys.stdout = self.stdout_writer
     mod.sys.stderr = self.stderr_writer
 
-    mod.sys.argv = m.argv
-    for k, v in m.environ.items():
+    mod.sys.argv = argv
+    for k, v in environ.items():
       mod.os.environ[k] = v
 
-    def code_exec():
-      try:
-        exec(code, mod.__dict__)
-      except Exception:
-        traceback.print_exc(file=self.stderr_writer)
-      finally:
-        self.host_task_queue.put(self.task_done)
+    return mod, code
 
-    self.host_task_queue.put(code_exec)
+
+  def code_exec(self, mod, code):
+    try:
+      exec(code, mod.__dict__)
+    except Exception:
+      traceback.print_exc(file=self.stderr_writer)
+
+
+  def for_load_code_by_path(self, m : pyenv.protocol.LoadCodeByPath):
+    file_content = open(m.path, encoding='utf-8').read()
+    log("load_code %s" % (m,))
+    mod, code = self.get_code(content=file_content,
+                              filename=m.path,
+                              argv=m.argv,
+                              environ=m.environ,
+                              pwd=m.pwd)
+
+    self.host_task_queue.put(lambda: self.code_exec(mod, code))
+    self.host_task_queue.put(self.task_done)
+
+  def for_load_code(self, m : pyenv.protocol.LoadCode):
+    mod, code = self.get_code(content=m.code,
+                              filename="<anonymous-client-code>",
+                              argv=m.argv,
+                              environ=m.environ,
+                              pwd=m.pwd)
+
+    self.host_task_queue.put(lambda: self.code_exec(mod, code))
+    self.host_task_queue.put(self.task_done)
+
+  def read_handler_excetion(self, e : Exception):
+    self.stderr_writer.write("Error from pyenv.host: \n")
+    traceback.print_exc(file=self.stderr_writer)
+    self.host_task_queue.put(self.task_done)
 
   def task_done(self):
     self.out_queue.put(Message(True, "stdout", ""))
@@ -114,7 +141,7 @@ def main(argv):
       host = Host(client_sock, client_addr)
       host.run()
     except Exception:
-      traceback.print_exc(file=old_stderr)
+      log(file=old_stderr)
 
 
 if __name__ == '__main__':
