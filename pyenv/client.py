@@ -117,12 +117,9 @@ def main(argv):
   optionals = parser.add_argument_group('required named arguments')
   optionals.add_argument('-ip', action='store', dest='ip', default='127.0.0.1', help='IP address of the pyenv host. ')
   optionals.add_argument('-port', action='store', default='8964', help='Port of the pyenv host. ', type=int)
-  optionals.add_argument('-wd', action='store', default=os.getcwd(), help='The user working directory. Note that host '
-                                                                          'runs in the manner of a single process '
-                                                                          'but each thread may require different '
-                                                                          'working directories, this do not change '
-                                                                          'the process\'s working directory, '
-                                                                          'but merely records it. ')
+  optionals.add_argument('-wd', action='store', default=os.getcwd(), help='The user working directory. '
+                                                                          'The host will switch to the directory to find `f`, '
+                                                                          'and execute your code. ')
   optionals.add_argument('-env', action='store', default=None, help='Extra environment variables for your script. ')
   optionals.add_argument('-c', action='store', default=None, help='Python script, executed with pyenv imported. '
                                                                   'This will override `f` argument. ')
