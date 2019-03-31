@@ -9,7 +9,7 @@ This is helpful when you are loading big files, which you definitely would not l
 
 + How to start the host environment
 ```
-python3.6 pyenv.host
+python3.6 -m pyenv.host
 ```
 + How to send your code to the host environment
 ```
