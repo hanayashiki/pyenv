@@ -1,6 +1,6 @@
 from typing import *
 import types
-import pyenv
+import py_env
 import importlib
 import importlib.util
 import socket
@@ -11,8 +11,8 @@ import os
 import traceback
 import argparse
 import copy
-from pyenv.protocol import TaskDone, Message
-from pyenv.utils import log, old_stderr, old_stdout
+from py_env.protocol import TaskDone, Message
+from py_env.utils import log, old_stderr, old_stdout
 import traceback
 
 class Host:
@@ -26,27 +26,27 @@ class Host:
     self.stdin_queue = queue.Queue()
     self.out_queue = queue.Queue()
 
-    self.stdin_proxy = pyenv.proxy_io.IOProxy(input_queue=self.stdin_queue, output_queue=None)
-    self.stdout_proxy = pyenv.proxy_io.IOProxy(input_queue=None, output_queue=self.out_queue)
-    self.stderr_proxy = pyenv.proxy_io.IOProxy(input_queue=None, output_queue=self.out_queue)
+    self.stdin_proxy = py_env.proxy_io.IOProxy(input_queue=self.stdin_queue, output_queue=None)
+    self.stdout_proxy = py_env.proxy_io.IOProxy(input_queue=None, output_queue=self.out_queue)
+    self.stderr_proxy = py_env.proxy_io.IOProxy(input_queue=None, output_queue=self.out_queue)
 
-    self.stdin_reader = pyenv.proxy_io.IOProxyReader(self.stdin_proxy)
-    self.stdout_writer = pyenv.proxy_io.IOProxyWriter("stdout", self.stdout_proxy)
-    self.stderr_writer = pyenv.proxy_io.IOProxyWriter("stderr", self.stderr_proxy)
+    self.stdin_reader = py_env.proxy_io.IOProxyReader(self.stdin_proxy)
+    self.stdout_writer = py_env.proxy_io.IOProxyWriter("stdout", self.stdout_proxy)
+    self.stderr_writer = py_env.proxy_io.IOProxyWriter("stderr", self.stderr_proxy)
 
     self.command_handlers = {
-      pyenv.protocol.LoadCodeByPath: self.for_load_code_by_path,
-      pyenv.protocol.LoadCode: self.for_load_code
+      py_env.protocol.LoadCodeByPath: self.for_load_code_by_path,
+      py_env.protocol.LoadCode: self.for_load_code
     }
 
-    self.socket_splitter = pyenv.proxy_io.SocketSplitter(protocol=pyenv.protocol.JsonProtocol(),
-                                                         sock=self.sock,
-                                                         sock_write_source=self.out_queue,
-                                                         sock_stdin_dest=self.stdin_queue,
-                                                         sock_stdout_dest=None,
-                                                         sock_stderr_dest=None,
-                                                         command_handlers=self.command_handlers,
-                                                         on_read_handler_exception=self.read_handler_excetion)
+    self.socket_splitter = py_env.proxy_io.SocketSplitter(protocol=py_env.protocol.JsonProtocol(),
+                                                          sock=self.sock,
+                                                          sock_write_source=self.out_queue,
+                                                          sock_stdin_dest=self.stdin_queue,
+                                                          sock_stdout_dest=None,
+                                                          sock_stderr_dest=None,
+                                                          command_handlers=self.command_handlers,
+                                                          on_read_handler_exception=self.read_handler_excetion)
 
   def run(self):
     threading.Thread(target=self.socket_splitter.run).start()
@@ -73,7 +73,7 @@ class Host:
     mod_os_spec = importlib.util.find_spec('os')
     mod.os = importlib.util.module_from_spec(mod_os_spec)
     mod_os_spec.loader.exec_module(mod.os)
-    mod.pyenv = pyenv
+    mod.py_env = py_env
 
 
     mod.sys.stdin = self.stdin_reader
@@ -94,7 +94,7 @@ class Host:
       traceback.print_exc(file=self.stderr_writer)
 
 
-  def for_load_code_by_path(self, m : pyenv.protocol.LoadCodeByPath):
+  def for_load_code_by_path(self, m : py_env.protocol.LoadCodeByPath):
     file_content = open(m.path, encoding='utf-8').read()
     log("load_code %s" % (m,))
     mod, code = self.get_code(content=file_content,
@@ -106,7 +106,7 @@ class Host:
     self.host_task_queue.put(lambda: self.code_exec(mod, code))
     self.host_task_queue.put(self.task_done)
 
-  def for_load_code(self, m : pyenv.protocol.LoadCode):
+  def for_load_code(self, m : py_env.protocol.LoadCode):
     mod, code = self.get_code(content=m.code,
                               filename="<anonymous-client-code>",
                               argv=m.argv,

@@ -1,3 +1,6 @@
 .idea/ 
 play/
 *.pyc
+py_env.egg-info/
+build/
+dist/

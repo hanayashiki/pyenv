@@ -4,8 +4,8 @@ import queue
 import selectors
 import logging
 import threading
-from pyenv.protocol import JsonProtocol, Message, TaskDone
-from pyenv.utils import log
+from py_env.protocol import JsonProtocol, Message, TaskDone
+from py_env.utils import log
 
 class SocketSplitter:
 
